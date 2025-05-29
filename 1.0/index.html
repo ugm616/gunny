@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Full Screen Vector Tank Game</title>
+  <style>
+    /* Remove any margins and scrollbars */
+    body, html {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background-color: #000;
+    }
+    svg {
+      display: block;
+      background-color: #111;
+    }
+  </style>
+</head>
+<body>
+  <!-- Full-screen SVG canvas -->
+  <svg id="gameCanvas" width="100vw" height="100vh"></svg>
+
+  <script>
+    const canvas = document.getElementById('gameCanvas');
+    let vw = window.innerWidth;
+    let vh = window.innerHeight;
+    canvas.setAttribute('viewBox', `0 0 ${vw} ${vh}`);
+
+    // --- Game Entities and Variables ---
+    const player = {
+      x: vw / 2,
+      y: vh / 2,
+      angle: 0,         // angle in radians
+      weaponLevel: 1    // upgrades the bullet speed/power
+    };
+    let score = 0;
+    const bullets = [];
+    const enemies = [];
+
+    // --- Create the Player Tank using SVG ---
+    const playerGroup = document.createElementNS("http://www.w3.org/2000/svg", 'g');
+    playerGroup.setAttribute('id', 'player');
+    
+    // Tank body
+    const tankBody = document.createElementNS("http://www.w3.org/2000/svg", 'rect');
+    tankBody.setAttribute('x', -20);
+    tankBody.setAttribute('y', -10);
+    tankBody.setAttribute('width', 40);
+    tankBody.setAttribute('height', 20);
+    tankBody.setAttribute('fill', 'lime');
+    playerGroup.appendChild(tankBody);
+    
+    // Tank turret (center circle)
+    const tankTurret = document.createElementNS("http://www.w3.org/2000/svg", 'circle');
+    tankTurret.setAttribute('cx', 0);
+    tankTurret.setAttribute('cy', 0);
+    tankTurret.setAttribute('r', 10);
+    tankTurret.setAttribute('fill', 'red');
+    playerGroup.appendChild(tankTurret);
+    
+    // Tank barrel
+    const tankBarrel = document.createElementNS("http://www.w3.org/2000/svg", 'rect');
+    tankBarrel.setAttribute('x', 0);
+    tankBarrel.setAttribute('y', -3);
+    tankBarrel.setAttribute('width', 30);
+    tankBarrel.setAttribute('height', 6);
+    tankBarrel.setAttribute('fill', 'yellow');
+    playerGroup.appendChild(tankBarrel);
+    
+    canvas.appendChild(playerGroup);
+    
+    function renderPlayer() {
+      // Convert the angle to degrees for SVG rotation
+      const angleDeg = player.angle * (180 / Math.PI);
+      playerGroup.setAttribute('transform', `translate(${player.x},${player.y}) rotate(${angleDeg})`);
+    }
+    renderPlayer();
+
+    // --- Keyboard Input ---
+    const keys = {};
+    document.addEventListener('keydown', (e) => {
+      keys[e.key] = true;
+      if (e.code === 'Space') {
+        fireBullet();
+      }
+    });
+    document.addEventListener('keyup', (e) => {
+      keys[e.key] = false;
+    });
+
+    // --- Bullet Logic ---
+    function fireBullet() {
+      // Bullet speed increases with the player's weapon level
+      const bulletSpeed = 15 + (player.weaponLevel * 2);
+      const bullet = {
+        x: player.x + Math.cos(player.angle) * 30, // start at the tip of the barrel
+        y: player.y + Math.sin(player.angle) * 30,
+        vx: Math.cos(player.angle) * bulletSpeed,
+        vy: Math.sin(player.angle) * bulletSpeed,
+        lifetime: 100 // frames
+      };
+
+      // Create the SVG element for the bullet
+      const bulletEl = document.createElementNS("http://www.w3.org/2000/svg", 'circle');
+      bulletEl.setAttribute('cx', bullet.x);
+      bulletEl.setAttribute('cy', bullet.y);
+      bulletEl.setAttribute('r', 5);
+      bulletEl.setAttribute('fill', 'white');
+      bullet.el = bulletEl;
+      canvas.appendChild(bulletEl);
+      bullets.push(bullet);
+    }
+
+    // --- Enemy Spawning ---
+    function spawnEnemy() {
+      const enemy = {
+        x: Math.random() * vw,
+        y: Math.random() * vh,
+        vx: 0,
+        vy: 0,
+        size: 20,
+        health: 3
+      };
+      // Ensure enemy doesn't spawn too close to the player.
+      let dx = enemy.x - player.x;
+      let dy = enemy.y - player.y;
+      if (Math.sqrt(dx * dx + dy * dy) < 100) {
+        enemy.x = (enemy.x + 200) % vw;
+        enemy.y = (enemy.y + 200) % vh;
+      }
+      
+      // Create enemy as a rectangle
+      const enemyEl = document.createElementNS("http://www.w3.org/2000/svg", 'rect');
+      enemyEl.setAttribute('x', enemy.x - enemy.size / 2);
+      enemyEl.setAttribute('y', enemy.y - enemy.size / 2);
+      enemyEl.setAttribute('width', enemy.size);
+      enemyEl.setAttribute('height', enemy.size);
+      enemyEl.setAttribute('fill', 'orange');
+      enemy.el = enemyEl;
+      canvas.appendChild(enemyEl);
+      enemies.push(enemy);
+    }
+    // Spawn an enemy every 3 seconds.
+    setInterval(spawnEnemy, 3000);
+
+    // --- Game Update Loop and Physics ---
+    function update() {
+      // --- Player Movement ---
+      if (keys['ArrowUp']) {
+        player.x += Math.cos(player.angle) * 3;
+        player.y += Math.sin(player.angle) * 3;
+      }
+      if (keys['ArrowDown']) {
+        player.x -= Math.cos(player.angle) * 3;
+        player.y -= Math.sin(player.angle) * 3;
+      }
+      if (keys['ArrowLeft']) {
+        player.angle -= 0.05;
+      }
+      if (keys['ArrowRight']) {
+        player.angle += 0.05;
+      }
+      // Wrap the player's position around screen edges
+      if (player.x < 0) player.x = vw;
+      if (player.x > vw) player.x = 0;
+      if (player.y < 0) player.y = vh;
+      if (player.y > vh) player.y = 0;
+      renderPlayer();
+
+      // --- Update Bullets ---
+      bullets.forEach((bullet, bIndex) => {
+        bullet.x += bullet.vx;
+        bullet.y += bullet.vy;
+        bullet.lifetime--;
+        bullet.el.setAttribute('cx', bullet.x);
+        bullet.el.setAttribute('cy', bullet.y);
+        // Remove bullet if out of bounds or its lifetime expires.
+        if (
+          bullet.lifetime <= 0 ||
+          bullet.x < 0 || bullet.x > vw ||
+          bullet.y < 0 || bullet.y > vh
+        ) {
+          canvas.removeChild(bullet.el);
+          bullets.splice(bIndex, 1);
+        }
+      });
+
+      // --- Update Enemies ---
+      enemies.forEach((enemy, eIndex) => {
+        // Simple AI: enemies move toward the player.
+        let dx = player.x - enemy.x;
+        let dy = player.y - enemy.y;
+        let angleToPlayer = Math.atan2(dy, dx);
+        enemy.vx = Math.cos(angleToPlayer) * 1;
+        enemy.vy = Math.sin(angleToPlayer) * 1;
+        enemy.x += enemy.vx;
+        enemy.y += enemy.vy;
+        enemy.el.setAttribute('x', enemy.x - enemy.size / 2);
+        enemy.el.setAttribute('y', enemy.y - enemy.size / 2);
+
+        // Collision detection: enemy collides with the player.
+        let distToPlayer = Math.hypot(player.x - enemy.x, player.y - enemy.y);
+        if (distToPlayer < enemy.size / 2 + 20) { // 20 is an approximate radius for the player tank
+          alert('Game Over! Your score: ' + score);
+          window.location.reload();
+        }
+      });
+
+      // --- Collision Detection: Bullets vs. Enemies ---
+      bullets.forEach((bullet, bIndex) => {
+        enemies.forEach((enemy, eIndex) => {
+          let dist = Math.hypot(bullet.x - enemy.x, bullet.y - enemy.y);
+          if (dist < enemy.size / 2 + 5) { // 5 is the bullet radius
+            // Remove the bullet on collision.
+            canvas.removeChild(bullet.el);
+            bullets.splice(bIndex, 1);
+            // Damage the enemy.
+            enemy.health--;
+            if (enemy.health <= 0) {
+              canvas.removeChild(enemy.el);
+              enemies.splice(eIndex, 1);
+              score++;
+              // Upgrade weapon every 5 enemy kills.
+              if (score % 5 === 0) {
+                player.weaponLevel++;
+                console.log('Weapon upgraded to level ' + player.weaponLevel);
+              }
+            }
+          }
+        });
+      });
+
+      requestAnimationFrame(update);
+    }
+    update();
+
+    // --- Handle Window Resize for Fullscreen Responsiveness ---
+    window.addEventListener('resize', () => {
+      vw = window.innerWidth;
+      vh = window.innerHeight;
+      canvas.setAttribute('width', vw);
+      canvas.setAttribute('height', vh);
+      canvas.setAttribute('viewBox', `0 0 ${vw} ${vh}`);
+    });
+  </script>
+</body>
+</html>

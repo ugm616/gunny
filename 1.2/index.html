@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <title>Urban Vector Tank Game</title>
+    <style>
+      body, html {
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        background-color: #000;
+      }
+      svg {
+        display: block;
+        background-color: #222;
+      }
+      /* HUD text style */
+      text {
+        font-family: Arial, sans-serif;
+        fill: white;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- The SVG canvas fills the entire window -->
+    <svg id="gameCanvas" width="100vw" height="100vh"></svg>
+
+    <script>
+      // Set up SVG canvas and viewBox for full screen.
+      const canvas = document.getElementById("gameCanvas");
+      let vw = window.innerWidth, vh = window.innerHeight;
+      canvas.setAttribute("viewBox", `0 0 ${vw} ${vh}`);
+
+      // Global arrays for bullets, enemies, and terrain.
+      let score = 0;
+      const playerBullets = [];
+      const enemyBullets = [];
+      const enemies = [];
+      const terrains = []; // urban environment pieces
+
+      // --- Player Setup ---
+      const player = {
+          x: vw / 2,
+          y: vh / 2,
+          angle: 0,
+          health: 100,
+          ammoType: "normal", // options: "normal", "heavy", "slow"
+          weaponLevel: 1
+      };
+
+      // Create the player's tank as an SVG group.
+      const playerGroup = document.createElementNS("http://www.w3.org/2000/svg", "g");
+      playerGroup.setAttribute("id", "player");
+
+      // Player tank body (lime)
+      const pBody = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      pBody.setAttribute("x", -20);
+      pBody.setAttribute("y", -10);
+      pBody.setAttribute("width", 40);
+      pBody.setAttribute("height", 20);
+      pBody.setAttribute("fill", "lime");
+      playerGroup.appendChild(pBody);
+
+      // Player turret (red)
+      const pTurret = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      pTurret.setAttribute("cx", 0);
+      pTurret.setAttribute("cy", 0);
+      pTurret.setAttribute("r", 10);
+      pTurret.setAttribute("fill", "red");
+      playerGroup.appendChild(pTurret);
+
+      // Player barrel (yellow)
+      const pBarrel = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      pBarrel.setAttribute("x", 0);
+      pBarrel.setAttribute("y", -3);
+      pBarrel.setAttribute("width", 30);
+      pBarrel.setAttribute("height", 6);
+      pBarrel.setAttribute("fill", "yellow");
+      playerGroup.appendChild(pBarrel);
+
+      canvas.appendChild(playerGroup);
+
+      function renderPlayer() {
+          const angleDeg = player.angle * 180 / Math.PI;
+          playerGroup.setAttribute("transform", `translate(${player.x}, ${player.y}) rotate(${angleDeg})`);
+      }
+      renderPlayer();
+
+      // --- HUD Setup (Health Bar & Ammo Type) ---
+      const hudGroup = document.createElementNS("http://www.w3.org/2000/svg", "g");
+      hudGroup.setAttribute("id", "hud");
+      // Health bar background rectangle.
+      const healthBg = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      healthBg.setAttribute("x", 20);
+      healthBg.setAttribute("y", 20);
+      healthBg.setAttribute("width", 200);
+      healthBg.setAttribute("height", 20);
+      healthBg.setAttribute("fill", "#444");
+      hudGroup.appendChild(healthBg);
+      // Health bar foreground indicating current health.
+      const healthBar = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      healthBar.setAttribute("id", "healthInner");
+      healthBar.setAttribute("x", 20);
+      healthBar.setAttribute("y", 20);
+      healthBar.setAttribute("width", 200);
+      healthBar.setAttribute("height", 20);
+      healthBar.setAttribute("fill", "lime");
+      hudGroup.appendChild(healthBar);
+      // Ammo type display text.
+      const ammoText = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      ammoText.setAttribute("id", "ammoDisplay");
+      ammoText.setAttribute("x", 20);
+      ammoText.setAttribute("y", 60);
+      ammoText.textContent = "Ammo: Normal";
+      hudGroup.appendChild(ammoText);
+
+      canvas.appendChild(hudGroup);
+
+      function updateHUD() {
+          // Update health bar width, and display the current ammo type.
+          const healthPercent = Math.max(player.health, 0) / 100;
+          document.getElementById("healthInner").setAttribute("width", 200 * healthPercent);
+          let ammoLabel = "Normal";
+          if (player.ammoType === "heavy") ammoLabel = "Heavy";
+          else if (player.ammoType === "slow") ammoLabel = "Slow";
+          document.getElementById("ammoDisplay").textContent = "Ammo: " + ammoLabel;
+      }
+
+      // --- Urban Terrain Generation ---
+      function generateTerrain() {
+          // Roads (do not block bullets but can affect movement).
+          // Horizontal road.
+          let roadH = {
+              x: 0,
+              y: Math.random() * (vh - 60),
+              width: vw,
+              height: 60,
+              type: "road"
+          };
+          roadH.el = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+          roadH.el.setAttribute("x", roadH.x);
+          roadH.el.setAttribute("y", roadH.y);
+          roadH.el.setAttribute("width", roadH.width);
+          roadH.el.setAttribute("height", roadH.height);
+          roadH.el.setAttribute("fill", "#333");
+          canvas.appendChild(roadH.el);
+          terrains.push(roadH);
+
+          // Vertical road.
+          let roadV = {
+              x: Math.random() * (vw - 60),
+              y: 0,
+              width: 60,
+              height: vh,
+              type: "road"
+          };
+          roadV.el = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+          roadV.el.setAttribute("x", roadV.x);
+          roadV.el.setAttribute("y", roadV.y);
+          roadV.el.setAttribute("width", roadV.width);
+          roadV.el.setAttribute("height", roadV.height);
+          roadV.el.setAttribute("fill", "#333");
+          canvas.appendChild(roadV.el);
+          terrains.push(roadV);
+
+          // Rough ground patches (which slow movement).
+          for (let i = 0; i < 2; i++) {
+              let rough = {
+                  x: Math.random() * (vw - 150),
+                  y: Math.random() * (vh - 150),
+                  width: 100 + Math.random() * 50,
+                  height: 100 + Math.random() * 50,
+                  type: "rough"
+              };
+              rough.el = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+              rough.el.setAttribute("x", rough.x);
+              rough.el.setAttribute("y", rough.y);
+              rough.el.setAttribute("width", rough.width);
+              rough.el.setAttribute("height", rough.height);
+              rough.el.setAttribute("fill", "#8B4513"); // brownish color
+              canvas.appendChild(rough.el);
+              terrains.push(rough);
+          }
+
+          // Walls (block bullets and line of sight).
+          for (let i = 0; i < 3; i++) {
+              let wall = {
+                  x: Math.random() * (vw - 100),
+                  y: Math.random() * (vh - 100),
+                  width: 50 + Math.random() * 50,
+                  height: 20 + Math.random() * 30,
+                  type: "wall"
+              };
+              wall.el = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+              wall.el.setAttribute("x", wall.x);
+              wall.el.setAttribute("y", wall.y);
+              wall.el.setAttribute("width", wall.width);
+              wall.el.setAttribute("height", wall.height);
+              wall.el.setAttribute("fill", "#555");
+              canvas.appendChild(wall.el);
+              terrains.push(wall);
+          }
+
+          // Buildings (also block bullets).
+          for (let i = 0; i < 2; i++) {
+              let building = {
+                  x: Math.random() * (vw - 200),
+                  y: Math.random() * (vh - 200),
+                  width: 100 + Math.random() * 100,
+                  height: 100 + Math.random() * 100,
+                  type: "building"
+              };
+              building.el = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+              building.el.setAttribute("x", building.x);
+              building.el.setAttribute("y", building.y);
+              building.el.setAttribute("width", building.width);
+              building.el.setAttribute("height", building.height);
+              building.el.setAttribute("fill", "#777");
+              canvas.appendChild(building.el);
+              terrains.push(building);
+          }
+      }
+      generateTerrain();
+
+      // A helper that determines the player’s movement speed based on terrain.
+      function getPlayerSpeed() {
+          let baseSpeed = 3;
+          terrains.forEach(terrain => {
+              if (terrain.type === "road" || terrain.type === "rough") {
+                  if (
+                      player.x >= terrain.x &&
+                      player.x <= terrain.x + terrain.width &&
+                      player.y >= terrain.y &&
+                      player.y <= terrain.y + terrain.height
+                  ) {
+                      if (terrain.type === "road") baseSpeed *= 1.2;
+                      else if (terrain.type === "rough") baseSpeed *= 0.5;
+                  }
+              }
+          });
+          return baseSpeed;
+      }
+
+      // Returns true if a bullet (player or enemy) is in a blocking terrain (wall or building)
+      function checkBulletTerrainCollision(bullet) {
+          for (let i = 0; i < terrains.length; i++) {
+              const t = terrains[i];
+              if (t.type === "wall" || t.type === "building") {
+                  if (bullet.x >= t.x && bullet.x <= t.x + t.width &&
+                      bullet.y >= t.y && bullet.y <= t.y + t.height) {
+                      return true;
+                  }
+              }
+          }
+          return false;
+      }
+
+      // --- Player Bullet Logic ---
+      function firePlayerBullet() {
+          const bulletSpeed = 15 + player.weaponLevel * 2;
+          const bullet = {
+              x: player.x + Math.cos(player.angle) * 30,
+              y: player.y + Math.sin(player.angle) * 30,
+              vx: Math.cos(player.angle) * bulletSpeed,
+              vy: Math.sin(player.angle) * bulletSpeed,
+              lifetime: 100,
+              type: player.ammoType, // "normal", "heavy", or "slow"
+              damage: (player.ammoType === "heavy") ? 2 : 1
+          };
+          const bulletEl = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+          bulletEl.setAttribute("cx", bullet.x);
+          bulletEl.setAttribute("cy", bullet.y);
+          bulletEl.setAttribute("r", 5);
+          bulletEl.setAttribute("fill", "white");
+          bullet.el = bulletEl;
+          canvas.appendChild(bulletEl);
+          playerBullets.push(bullet);
+      }
+
+      // --- Enemy Tank Creation & Behavior ---
+      // Returns a random point on the map.
+      function getRandomPoint() {
+          return { x: Math.random() * vw, y: Math.random() * vh };
+      }
+
+      // Create an enemy tank at (x,y) with its own patrol behavior.
+      function createEnemyTank(x, y) {
+          const enemy = {
+              x: x,
+              y: y,
+              angle: 0,
+              state: "patrol", // other state: "pursue"
+              patrolTarget: getRandomPoint(),
+              cooldown: 0,
+              health: 3,
+              slowTimer: 0,
+              group: null
+          };
+          // Enemy tank design (blue body, white turret, grey barrel)
+          const eGroup = document.createElementNS("http://www.w3.org/2000/svg", "g");
+          const eBody = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+          eBody.setAttribute("x", -20);
+          eBody.setAttribute("y", -10);
+          eBody.setAttribute("width", 40);
+          eBody.setAttribute("height", 20);
+          eBody.setAttribute("fill", "blue");
+          eGroup.appendChild(eBody);
+          const eTurret = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+          eTurret.setAttribute("cx", 0);
+          eTurret.setAttribute("cy", 0);
+          eTurret.setAttribute("r", 10);
+          eTurret.setAttribute("fill", "white");
+          eGroup.appendChild(eTurret);
+          const eBarrel = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+          eBarrel.setAttribute("x", 0);
+          eBarrel.setAttribute("y", -3);
+          eBarrel.setAttribute("width", 30);
+          eBarrel.setAttribute("height", 6);
+          eBarrel.setAttribute("fill", "grey");
+          eGroup.appendChild(eBarrel);
+          canvas.appendChild(eGroup);
+          enemy.group = eGroup;
+          return enemy;
+      }
+
+      // Spawn enemy tanks from a random edge.
+      function spawnEnemy() {
+          const edges = ["top", "bottom", "left", "right"];
+          const edge = edges[Math.floor(Math.random() * edges.length)];
+          let x, y;
+          switch(edge) {
+              case "top":    x = Math.random() * vw; y = 0; break;
+              case "bottom": x = Math.random() * vw; y = vh; break;
+              case "left":   x = 0; y = Math.random() * vh; break;
+              case "right":  x = vw; y = Math.random() * vh; break;
+          }
+          const enemy = createEnemyTank(x, y);
+          enemies.push(enemy);
+      }
+      // Spawn an enemy every 4 seconds.
+      setInterval(spawnEnemy, 4000);
+
+      // --- Enemy Bullet Logic ---
+      function fireEnemyBullet(enemy) {
+          const bulletSpeed = 10;
+          const bullet = {
+              x: enemy.x + Math.cos(enemy.angle) * 30,
+              y: enemy.y + Math.sin(enemy.angle) * 30,
+              vx: Math.cos(enemy.angle) * bulletSpeed,
+              vy: Math.sin(enemy.angle) * bulletSpeed,
+              lifetime: 150,
+              damage: 10
+          };
+          const bulletEl = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+          bulletEl.setAttribute("cx", bullet.x);
+          bulletEl.setAttribute("cy", bullet.y);
+          bulletEl.setAttribute("r", 5);
+          bulletEl.setAttribute("fill", "red");
+          bullet.el = bulletEl;
+          canvas.appendChild(bulletEl);
+          enemyBullets.push(bullet);
+      }
+
+      // Determines if an enemy “sees” the player (within 300px and 180° FOV).
+      function enemySeesPlayer(enemy) {
+          const dx = player.x - enemy.x;
+          const dy = player.y - enemy.y;
+          const dist = Math.hypot(dx, dy);
+          if (dist > 300) return false;
+          const angleToPlayer = Math.atan2(dy, dx);
+          let diff = Math.abs(angleToPlayer - enemy.angle);
+          if (diff > Math.PI) diff = 2 * Math.PI - diff;
+          return diff <= Math.PI / 2;
+      }
+
+      // --- Input Handling ---
+      const keys = {};
+      document.addEventListener("keydown", (e) => {
+          keys[e.key] = true;
+          // Switch ammo types with keys 1, 2, and 3.
+          if (e.key === "1") player.ammoType = "normal";
+          if (e.key === "2") player.ammoType = "heavy";
+          if (e.key === "3") player.ammoType = "slow";
+          // Fire when Space is pressed.
+          if (e.code === "Space") {
+              firePlayerBullet();
+          }
+      });
+      document.addEventListener("keyup", (e) => {
+          keys[e.key] = false;
+      });
+
+      // --- Main Game Update Loop ---
+      function update() {
+          // --- Update Player Movement ---
+          const moveSpeed = getPlayerSpeed();
+          if (keys["ArrowUp"]) {
+              player.x += Math.cos(player.angle) * moveSpeed;
+              player.y += Math.sin(player.angle) * moveSpeed;
+          }
+          if (keys["ArrowDown"]) {
+              player.x -= Math.cos(player.angle) * moveSpeed;
+              player.y -= Math.sin(player.angle) * moveSpeed;
+          }
+          if (keys["ArrowLeft"]) {
+              player.angle -= 0.05;
+          }
+          if (keys["ArrowRight"]) {
+              player.angle += 0.05;
+          }
+          // Wrap player around the screen edges.
+          if (player.x < 0) player.x = vw;
+          if (player.x > vw) player.x = 0;
+          if (player.y < 0) player.y = vh;
+          if (player.y > vh) player.y = 0;
+          renderPlayer();
+
+          // --- Update Player Bullets ---
+          for (let i = playerBullets.length - 1; i >= 0; i--) {
+              const b = playerBullets[i];
+              b.x += b.vx;
+              b.y += b.vy;
+              b.lifetime--;
+              b.el.setAttribute("cx", b.x);
+              b.el.setAttribute("cy", b.y);
+              if (b.lifetime <= 0 || b.x < 0 || b.x > vw || b.y < 0 || b.y > vh || checkBulletTerrainCollision(b)) {
+                  canvas.removeChild(b.el);
+                  playerBullets.splice(i, 1);
+                  continue;
+              }
+              // Collision with enemy tanks
+              for (let j = enemies.length - 1; j >= 0; j--) {
+                  const enemy = enemies[j];
+                  if (Math.hypot(b.x - enemy.x, b.y - enemy.y) < 20) {
+                      canvas.removeChild(b.el);
+                      playerBullets.splice(i, 1);
+                      enemy.health -= b.damage;
+                      if(b.type === "slow") {
+                          enemy.slowTimer = 120; // slow effect for 120 frames
+                      }
+                      if(enemy.health <= 0) {
+                          canvas.removeChild(enemy.group);
+                          enemies.splice(j, 1);
+                          score++;
+                      }
+                      break;
+                  }
+              }
+          }
+
+          // --- Update Enemy Bullets ---
+          for (let i = enemyBullets.length - 1; i >= 0; i--) {
+              const b = enemyBullets[i];
+              b.x += b.vx;
+              b.y += b.vy;
+              b.lifetime--;
+              b.el.setAttribute("cx", b.x);
+              b.el.setAttribute("cy", b.y);
+              if (b.lifetime <= 0 || b.x < 0 || b.x > vw || b.y < 0 || b.y > vh || checkBulletTerrainCollision(b)) {
+                  canvas.removeChild(b.el);
+                  enemyBullets.splice(i, 1);
+                  continue;
+              }
+              if (Math.hypot(b.x - player.x, b.y - player.y) < 20) {
+                  player.health -= b.damage;
+                  canvas.removeChild(b.el);
+                  enemyBullets.splice(i, 1);
+                  if (player.health <= 0) {
+                      alert("Game Over! Score: " + score);
+                      window.location.reload();
+                  }
+              }
+          }
+
+          // --- Update Enemies ---
+          enemies.forEach(enemy => {
+              // Apply slow effect if active.
+              let speedMultiplier = 1;
+              if (enemy.slowTimer > 0) {
+                  speedMultiplier = 0.5;
+                  enemy.slowTimer--;
+              }
+              // Patrol mode: move toward a patrol target.
+              if (enemy.state === "patrol") {
+                  const dx = enemy.patrolTarget.x - enemy.x;
+                  const dy = enemy.patrolTarget.y - enemy.y;
+                  const dist = Math.hypot(dx, dy);
+                  if (dist < 10) {
+                      enemy.patrolTarget = getRandomPoint();
+                  } else {
+                      enemy.angle = Math.atan2(dy, dx);
+                      enemy.x += Math.cos(enemy.angle) * 1 * speedMultiplier;
+                      enemy.y += Math.sin(enemy.angle) * 1 * speedMultiplier;
+                  }
+                  // If the player is spotted within a 180° forward cone and within 300 pixels, switch to pursuit.
+                  if (enemySeesPlayer(enemy)) {
+                      enemy.state = "pursue";
+                  }
+              } else if (enemy.state === "pursue") {
+                  const dx = player.x - enemy.x;
+                  const dy = player.y - enemy.y;
+                  enemy.angle = Math.atan2(dy, dx);
+                  enemy.x += Math.cos(enemy.angle) * 1.5 * speedMultiplier;
+                  enemy.y += Math.sin(enemy.angle) * 1.5 * speedMultiplier;
+                  enemy.cooldown--;
+                  if (enemy.cooldown <= 0 && enemySeesPlayer(enemy)) {
+                      fireEnemyBullet(enemy);
+                      enemy.cooldown = 180; // enemy fires only once every 3 seconds at approx. 60 fps.
+                  }
+                  if (!enemySeesPlayer(enemy)) {
+                      enemy.state = "patrol";
+                      enemy.patrolTarget = getRandomPoint();
+                  }
+              }
+              enemy.group.setAttribute("transform", `translate(${enemy.x}, ${enemy.y}) rotate(${enemy.angle * 180/Math.PI})`);
+          });
+
+          updateHUD();
+          requestAnimationFrame(update);
+      }
+      update();
+
+      // --- Handle Window Resize ---
+      window.addEventListener("resize", () => {
+          vw = window.innerWidth;
+          vh = window.innerHeight;
+          canvas.setAttribute("viewBox", `0 0 ${vw} ${vh}`);
+      });
+    </script>
+  </body>
+</html>

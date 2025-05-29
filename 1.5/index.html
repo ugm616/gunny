@@ -1,0 +1,929 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>A Ukranian Tale</title>
+  <style>
+    /* General Styling */
+    body, html {
+      margin: 0;
+      padding: 0;
+      background: #000;
+      color: #0f0;
+      font-family: 'Press Start 2P', monospace; /* Retro 8-bit style */
+      overflow: hidden;
+    }
+    /* Screens (Mode select, Mission, Game, etc.) */
+    #modeSelect, #missionScreen, #gameScreen, #missionCompleteScreen, #gameOverScreen {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      display: none;
+      background: #000;
+      color: #0f0;
+      text-align: center;
+      padding-top: 5%;
+      box-sizing: border-box;
+    }
+    #modeSelect { display: block; }
+    /* Button Styles: Black background with green text */
+    button {
+      background-color: black;
+      color: green;
+      margin: 10px;
+      padding: 10px 20px;
+      font-family: inherit;
+      font-size: 16px;
+      cursor: pointer;
+      border: 2px solid green;
+    }
+    /* Pause Button Container (Top Right) */
+    #pauseContainer {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      z-index: 1000;
+    }
+    /* SVG Game Canvas */
+    #gameCanvas {
+      width: 100%;
+      height: 100%;
+      background: #222;
+      display: block;
+    }
+    /* HUD Styling */
+    #hud {
+      pointer-events: none;
+    }
+    /* Retro-text style */
+    .retro-text {
+      font-size: 16px;
+      white-space: pre-wrap;
+      margin: 10px auto;
+      max-width: 90%;
+    }
+  </style>
+</head>
+<body>
+  <!-- Mode Selection Screen -->
+  <div id="modeSelect">
+    <h1>A UKRAINIAN TALE</h1>
+    <p class="retro-text">Select Difficulty</p>
+    <button onclick="setDifficulty('easy')">Easy (Infinite Lives)</button>
+    <button onclick="setDifficulty('medium')">Medium (3 Lives + Bonus)</button>
+    <button onclick="setDifficulty('hard')">Hard (1 Life)</button>
+  </div>
+
+  <!-- Mission Screen -->
+  <div id="missionScreen">
+    <div id="missionText" class="retro-text"></div>
+    <button onclick="startCurrentMission()">Start Mission</button>
+  </div>
+
+  <!-- Game Screen -->
+  <div id="gameScreen">
+    <svg id="gameCanvas"></svg>
+    <!-- Pause Button Container (always visible on Game Screen) -->
+    <div id="pauseContainer">
+      <button id="pauseBtn" onclick="togglePause()">Pause</button>
+    </div>
+  </div>
+
+  <!-- Mission Complete Screen -->
+  <div id="missionCompleteScreen">
+    <h1>Mission Complete!</h1>
+    <button onclick="nextMission()">Next Mission</button>
+  </div>
+
+  <!-- Game Over Screen -->
+  <div id="gameOverScreen">
+    <h1>Game Over!</h1>
+    <p id="gameOverText" class="retro-text"></p>
+    <button onclick="restartGame()">Restart Game</button>
+  </div>
+
+  <script>
+    /***** GLOBAL VARIABLES *****/
+    let difficulty = null;
+    let playerLives = 0;
+    let enemyKillCount = 0;
+    let currentMissionIndex = 0;
+    let currentMission = null;
+    let missions = [];  // Holds our 30 mission definitions
+
+    // Game state objects
+    let player = null;
+    let playerBullets = [];
+    let enemyBullets = [];
+    let enemies = [];
+    let terrains = [];
+    let gameLoopId = null;
+    let gameOver = false;
+    let isPaused = false;  // Global pause flag
+
+    // Extra objective global variables
+    let rescueTarget = null;   // For "rescue" extra objective
+    let targetBuilding = null; // For "destroy-target" extra objective
+
+    // SVG Canvas and dimensions
+    const canvas = document.getElementById("gameCanvas");
+    let vw = window.innerWidth, vh = window.innerHeight;
+    canvas.setAttribute("viewBox", `0 0 ${vw} ${vh}`);
+
+    // Dedicated terrain layer (background)
+    const terrainLayer = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    terrainLayer.setAttribute("id", "terrainLayer");
+    canvas.insertBefore(terrainLayer, canvas.firstChild);
+
+    // HUD group (drawn on top of terrain)
+    const hudGroup = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    hudGroup.setAttribute("id", "hud");
+    canvas.appendChild(hudGroup);
+
+    // Create the player's tank group (global)
+    const playerGroup = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    playerGroup.setAttribute("id", "player");
+    canvas.appendChild(playerGroup);
+
+    /***** RENDER PLAYER *****/
+    function renderPlayer() {
+      if (!player) return;
+      const angleDeg = player.angle * (180 / Math.PI);
+      playerGroup.setAttribute("transform", `translate(${player.x}, ${player.y}) rotate(${angleDeg})`);
+    }
+
+    /***** MISSION DEFINITIONS *****/
+    // For brevity we include 30 missions. Two of these missions (mission 10 and 20) include extra objectives.
+    missions = [
+      { chapter: 1, title: "Rising from the Rubble", location: "Eastern Ukraine (near Kharkiv)", narrative: "In the charred outskirts of a once-thriving city, our fearless crew awakens amid smoldering ruins. With a stolen Russian tank as their only hope, they must secure the perimeter.", objective: "Destroy 3 enemy tanks to secure the area.", enemyCount: 3, mapType: "urban" },
+      { chapter: 2, title: "Shadows on the Outskirts", location: "A war‑torn village at Ukraine’s edge", narrative: "Skirting through a ghostly village, the crew faces ambushes at dusk. The 8‑bit night is lit by explosions as they push forward.", objective: "Eliminate 3 enemy tanks and secure a safe zone.", enemyCount: 3, mapType: "rural" },
+      { chapter: 3, title: "The Burning Fields", location: "Open fields dotted with wreckage", narrative: "Across a scorched landscape, the tank rumbles like a beast. Fire and fury light up the fields as enemy patrols approach.", objective: "Destroy 4 enemy tanks and recover secret intel.", enemyCount: 4, mapType: "rural" },
+      { chapter: 4, title: "The Lonely Checkpoint", location: "A desolate border checkpoint", narrative: "A forlorn checkpoint stands as the only remnant of order. The crew must overrun fortified enemy positions to create a breach.", objective: "Overrun enemy defenses; destroy 3 tanks.", enemyCount: 3, mapType: "urban" },
+      { chapter: 5, title: "City of Ghosts", location: "Ruined Ukrainian city streets", narrative: "Amid abandoned marketplaces and shattered glass, every ruined building tells a story. The crew maneuvers to uncover hidden enemy caches.", objective: "Clear 4 enemy tanks and gather supplies.", enemyCount: 4, mapType: "urban" },
+      { chapter: 6, title: "Crossing the Border", location: "The volatile Ukrainian border", narrative: "Stealth is their ally as the tank rolls into enemy territory. Each kilometer risks detection and ambush.", objective: "Eliminate 2 enemy tanks and breach the border.", enemyCount: 2, mapType: "rural" },
+      { chapter: 7, title: "Into the Lion’s Den", location: "Industrial wastelands of Russia", narrative: "Deep in hostile territory, the industrial zone is a bleak maze. Every shadow conceals danger as the crew pushes forward.", objective: "Destroy 3 enemy units hiding in the maze.", enemyCount: 3, mapType: "urban" },
+      { chapter: 8, title: "Nightfall at the Depot", location: "An abandoned munitions depot", narrative: "Under retro neon skies, the crew launches a daring nocturnal raid. Every minute counts in the fading light.", objective: "Destroy 3 enemy tanks before dawn.", enemyCount: 3, mapType: "urban" },
+      { chapter: 9, title: "Assault on the Rail Yard", location: "A deserted rail yard", narrative: "Among rusted carriages and forgotten tracks, enemy forces hide. The tank roars into battle as the yard becomes a war zone.", objective: "Obliterate 4 enemy tanks and secure munitions.", enemyCount: 4, mapType: "urban" },
+      { chapter: 10, title: "The Frozen Outpost", location: "Outskirts of Smolensk in bitter cold", narrative: "Ice and metal clash on a frozen battlefield. The crew’s tank defies nature as enemy foes close in. Rescue a stranded comrade!", objective: "Destroy 3 enemy tanks and rescue the comrade.", enemyCount: 3, mapType: "rural", extraObjective: { type: "rescue", description: "Rescue the stranded comrade." } },
+      { chapter: 11, title: "Shadows in the Industrial Maze", location: "A sprawling factory complex", narrative: "Deep beneath a leaden sky, the labyrinth of factories hides countless enemies. Stealth and precision are vital.", objective: "Clear 5 enemy tanks from the maze.", enemyCount: 5, mapType: "urban" },
+      { chapter: 12, title: "Ambush on the Highway", location: "A crumbling highway", narrative: "A relentless chase across fragmented roads—every turn hides a new ambush. The roar of engines fills the air.", objective: "Engage and destroy 4 enemy tanks along the highway.", enemyCount: 4, mapType: "rural" },
+      { chapter: 13, title: "Broken Bridges", location: "A vital bridge over a raging river", narrative: "A battered bridge is the lifeline between friend and foe. The crew must disable enemy fortifications to cross.", objective: "Clear 3 enemy tanks guarding the bridge.", enemyCount: 3, mapType: "urban" },
+      { chapter: 14, title: "Urban Warfare", location: "Narrow streets of a decaying metropolis", narrative: "In claustrophobic alleys and among crumbling high-rises, the stolen tank becomes both weapon and shield.", objective: "Eliminate 4 enemy tanks blocking urban routes.", enemyCount: 4, mapType: "urban" },
+      { chapter: 15, title: "The Forgotten Bunker", location: "Hidden bunkers under a ruined city", narrative: "Beneath the surface lies enemy archives. The crew descends into darkness, where danger waits behind every rusted door.", objective: "Neutralize 3 enemy tanks within the bunker network.", enemyCount: 3, mapType: "urban" },
+      { chapter: 16, title: "Deserted Promenade", location: "Outskirts of a seaside resort", narrative: "Along a weathered promenade, ghostly structures hide enemy forces. The silence is as eerie as it is dangerous.", objective: "Eliminate 3 hidden enemy tanks and scout for intel.", enemyCount: 3, mapType: "rural" },
+      { chapter: 17, title: "The Checkered Crossroads", location: "A major intersection in ruined suburbs", narrative: "Where abandoned roads converge, enemy contingents guard the passage. The crew must secure this critical junction.", objective: "Destroy 4 enemy tanks and secure the crossroads.", enemyCount: 4, mapType: "urban" },
+      { chapter: 18, title: "Skirmish at Dawn", location: "A blood‑stained field at first light", narrative: "As the early sun breaks, a brutal melee erupts. Every moment is a fight for survival in the glow of dawn.", objective: "Annihilate 4 enemy tanks before sunrise.", enemyCount: 4, mapType: "rural" },
+      { chapter: 19, title: "The Ghost Town Revisited", location: "A desolate town haunted by memories", narrative: "Returning to familiar ruins, the crew sifts through relics of the past while facing unexpected enemy ambushes.", objective: "Clear 3 enemy tanks and recover vital data.", enemyCount: 3, mapType: "urban" },
+      { chapter: 20, title: "The Outlaw’s Hideout", location: "A secluded enemy compound", narrative: "In a dark compound on the fringes of civilization, enemy forces have entrenched themselves. The crew prepares for a daring attack. Destroy the enemy communication center!", objective: "Destroy 5 enemy tanks and eliminate the target building.", enemyCount: 5, mapType: "rural", extraObjective: { type: "destroy-target", description: "Destroy the enemy communication center.", targetHealth: 3 } },
+      { chapter: 21, title: "The Siege Begins", location: "A besieged resistance bunker", narrative: "Enemy numbers swell as our heroes defend a key outpost. Legends are forged amidst chaos and carnage.", objective: "Hold off the assault and destroy 2 enemy tanks.", enemyCount: 2, mapType: "urban" },
+      { chapter: 22, title: "The Road to Smolensk", location: "A battered road leading to Smolensk", narrative: "Exposed on an open highway, the crew faces relentless ambushes—step by step, they edge closer to the enemy’s stronghold.", objective: "Eliminate 3 enemy tanks along the road.", enemyCount: 3, mapType: "rural" },
+      { chapter: 23, title: "Assault on the Supply Depot", location: "A heavily fortified supply hub", narrative: "Supplies mean power. In a daring raid, the crew storms a depot bristling with enemy defenses.", objective: "Clear 4 enemy tanks and secure the depot.", enemyCount: 4, mapType: "urban" },
+      { chapter: 24, title: "The Bitter Tundra", location: "A frozen expanse in enemy territory", narrative: "In the heart of a harsh tundra, every step is contested. The crew pushes forward through ice and enemy fire.", objective: "Eliminate 3 enemy tanks and secure a remote outpost.", enemyCount: 3, mapType: "rural" },
+      { chapter: 25, title: "The Road of Shadows", location: "A twilight path through treacherous terrain", narrative: "The dusk brings long shadows and hidden dangers. The crew must destroy enemy patrols without triggering alarms.", objective: "Destroy 3 enemy patrol units undetected.", enemyCount: 3, mapType: "rural" },
+      { chapter: 26, title: "Fire and Fury in the Industrial Sector", location: "A vast industrial complex", narrative: "Explosions light up the night in a pixelated inferno. The tank and enemy forces clash amid sparks and fury.", objective: "Eliminate 5 enemy tanks amid the chaos.", enemyCount: 5, mapType: "urban" },
+      { chapter: 27, title: "The Counteroffensive", location: "A captured enemy communication tower", narrative: "Victory here cripples enemy command. The crew defends the seized tower as hostile foes rally for a final stand.", objective: "Hold the tower and shoot down 4 enemy tanks.", enemyCount: 4, mapType: "urban" },
+      { chapter: 28, title: "Edge of the Kremlin’s Shadow", location: "The outskirts of Moscow", narrative: "With Moscow’s blood‑stained towers looming, our heroes push into the enemy’s inner sanctum. Every road is fraught with peril.", objective: "Destroy 4 enemy tanks guarding the approach.", enemyCount: 4, mapType: "urban" },
+      { chapter: 29, title: "The Final Gambit", location: "Just outside Moscow’s gates", narrative: "In a final burst of courage, the crew prepares for the ultimate confrontation. The fate of a nation hangs by a thread.", objective: "Overrun 5 enemy tanks and rescue a captured comrade.", enemyCount: 5, mapType: "urban" },
+      { chapter: 30, title: "The Fall of the Kremlin", location: "Inside Moscow, at the Kremlin", narrative: "The endgame unfolds amid flickering lights and shattered defenses. The stolen tank roars through the Kremlin’s gates as destiny awaits—Vladimir Putin must fall.", objective: "Eliminate 6 enemy tanks and confront the tyrant.", enemyCount: 6, mapType: "urban" }
+    ];
+
+    /***** SCREEN MANAGEMENT *****/
+    function showScreen(screenId) {
+      const screens = ["modeSelect", "missionScreen", "gameScreen", "missionCompleteScreen", "gameOverScreen"];
+      screens.forEach(id => {
+        document.getElementById(id).style.display = (id === screenId) ? "block" : "none";
+      });
+    }
+
+    /***** MODE SELECTION *****/
+    function setDifficulty(mode) {
+      difficulty = mode;
+      if (mode === "easy") {
+        playerLives = Infinity;
+      } else if (mode === "medium") {
+        playerLives = 3;
+      } else if (mode === "hard") {
+        playerLives = 1;
+      }
+      currentMissionIndex = 0;
+      enemyKillCount = 0;
+      showMissionScreen();
+    }
+
+    /***** MISSION SCREEN *****/
+    function showMissionScreen() {
+      currentMission = missions[currentMissionIndex];
+      let missionText = "";
+      missionText += "A UKRAINIAN TALE\n";
+      missionText += "Mission " + currentMission.chapter + ": " + currentMission.title + "\n\n";
+      missionText += "Location: " + currentMission.location + "\n\n";
+      missionText += currentMission.narrative + "\n\n";
+      missionText += "Objective: " + currentMission.objective + "\n";
+      if (currentMission.extraObjective) {
+        missionText += "Extra: " + currentMission.extraObjective.description + "\n";
+      }
+      document.getElementById("missionText").textContent = missionText;
+      showScreen("missionScreen");
+    }
+
+    function startCurrentMission() {
+      // Reset extra objective variables
+      rescueTarget = null;
+      targetBuilding = null;
+      resetGameObjects();
+      if (currentMission.mapType === "urban") {
+        generateUrbanTerrain();
+      } else if (currentMission.mapType === "rural") {
+        generateRuralTerrain();
+      }
+      // Instantiate extra objective if one is defined.
+      if (currentMission.extraObjective) {
+        if (currentMission.extraObjective.type === "rescue") {
+          // Create rescue target at a safe random location.
+          rescueTarget = { x: Math.random() * vw, y: Math.random() * vh, radius: 15 };
+          let rtEl = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+          rtEl.setAttribute("cx", rescueTarget.x);
+          rtEl.setAttribute("cy", rescueTarget.y);
+          rtEl.setAttribute("r", rescueTarget.radius);
+          rtEl.setAttribute("fill", "cyan");
+          rtEl.setAttribute("stroke", "white");
+          rtEl.setAttribute("stroke-width", "2");
+          canvas.appendChild(rtEl);
+          rescueTarget.el = rtEl;
+        } else if (currentMission.extraObjective.type === "destroy-target") {
+          // In an urban mission, pick one building at random as the target.
+          let buildings = terrains.filter(t => t.type === "building");
+          if (buildings.length > 0) {
+            targetBuilding = buildings[Math.floor(Math.random() * buildings.length)];
+            targetBuilding.health = currentMission.extraObjective.targetHealth || 3;
+            // Highlight the target building.
+            targetBuilding.el.setAttribute("stroke", "red");
+            targetBuilding.el.setAttribute("stroke-width", "3");
+          }
+        }
+      }
+      placePlayerSafely();
+      spawnEnemiesForMission(currentMission.enemyCount);
+      enemyKillCount = 0;
+      showScreen("gameScreen");
+      gameOver = false;
+      isPaused = false;
+      document.getElementById("pauseBtn").textContent = "Pause";
+      gameLoop();
+    }
+
+    function missionComplete() {
+      cancelAnimationFrame(gameLoopId);
+      showScreen("missionCompleteScreen");
+    }
+
+    function nextMission() {
+      currentMissionIndex++;
+      if (currentMissionIndex >= missions.length) {
+        alert("Congratulations! You have completed A Ukranian Tale!");
+        currentMissionIndex = 0;
+      }
+      showMissionScreen();
+    }
+
+    function restartGame() {
+      location.reload();
+    }
+
+    /***** TERRAIN GENERATION *****/
+    function generateUrbanTerrain() {
+      while (terrainLayer.firstChild) {
+        terrainLayer.removeChild(terrainLayer.firstChild);
+      }
+      terrains = [];
+      const verticalSpacing = 200,
+            horizontalSpacing = 200,
+            roadWidth = 60;
+      // Draw vertical roads.
+      for (let x = 0; x <= vw; x += verticalSpacing) {
+        let offsetX = x + (Math.random() * 20 - 10);
+        offsetX = Math.max(0, Math.min(offsetX, vw - roadWidth));
+        const vRoad = { x: offsetX, y: 0, width: roadWidth, height: vh, type: "road" };
+        const roadEl = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+        roadEl.setAttribute("x", vRoad.x);
+        roadEl.setAttribute("y", vRoad.y);
+        roadEl.setAttribute("width", vRoad.width);
+        roadEl.setAttribute("height", vRoad.height);
+        roadEl.setAttribute("fill", "#333");
+        vRoad.el = roadEl;
+        terrains.push(vRoad);
+        terrainLayer.appendChild(roadEl);
+      }
+      // Draw horizontal roads.
+      for (let y = 0; y <= vh; y += horizontalSpacing) {
+        let offsetY = y + (Math.random() * 20 - 10);
+        offsetY = Math.max(0, Math.min(offsetY, vh - roadWidth));
+        const hRoad = { x: 0, y: offsetY, width: vw, height: roadWidth, type: "road" };
+        const roadEl = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+        roadEl.setAttribute("x", hRoad.x);
+        roadEl.setAttribute("y", hRoad.y);
+        roadEl.setAttribute("width", hRoad.width);
+        roadEl.setAttribute("height", hRoad.height);
+        roadEl.setAttribute("fill", "#333");
+        hRoad.el = roadEl;
+        terrains.push(hRoad);
+        terrainLayer.appendChild(roadEl);
+      }
+      // Compute grid cell boundaries.
+      let vEdges = [0];
+      terrains.filter(t => t.type === "road" && t.height === vh)
+        .forEach(road => { vEdges.push(road.x); vEdges.push(road.x + road.width); });
+      vEdges.push(vw);
+      vEdges = [...new Set(vEdges)].sort((a, b) => a - b);
+      let hEdges = [0];
+      terrains.filter(t => t.type === "road" && t.width === vw)
+        .forEach(road => { hEdges.push(road.y); hEdges.push(road.y + road.height); });
+      hEdges.push(vh);
+      hEdges = [...new Set(hEdges)].sort((a, b) => a - b);
+      // Place buildings within each grid block.
+      for (let i = 0; i < vEdges.length - 1; i++){
+        for (let j = 0; j < hEdges.length - 1; j++){
+          const blockX = vEdges[i], blockY = hEdges[j];
+          const blockWidth = vEdges[i + 1] - vEdges[i], blockHeight = hEdges[j + 1] - hEdges[j];
+          if (blockWidth < roadWidth * 1.5 || blockHeight < roadWidth * 1.5) continue;
+          const margin = 10;
+          let bX = blockX + margin, bY = blockY + margin;
+          let bWidth = (blockWidth - 2 * margin) * (0.5 + Math.random() * 0.5);
+          let bHeight = (blockHeight - 2 * margin) * (0.5 + Math.random() * 0.5);
+          const building = { x: bX, y: bY, width: bWidth, height: bHeight, type: "building" };
+          const buildingEl = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+          buildingEl.setAttribute("x", building.x);
+          buildingEl.setAttribute("y", building.y);
+          buildingEl.setAttribute("width", building.width);
+          buildingEl.setAttribute("height", building.height);
+          buildingEl.setAttribute("fill", "#777");
+          building.el = buildingEl;
+          terrains.push(building);
+          terrainLayer.appendChild(buildingEl);
+        }
+      }
+    }
+    
+    function generateRuralTerrain() {
+      while (terrainLayer.firstChild) {
+        terrainLayer.removeChild(terrainLayer.firstChild);
+      }
+      terrains = [];
+      const numTrees = Math.floor((vw * vh) / 50000);
+      const numBushes = Math.floor((vw * vh) / 60000);
+      // Trees.
+      for (let i = 0; i < numTrees; i++){
+        let tree = { type: "tree", x: Math.random() * vw, y: Math.random() * vh, radius: 20 };
+        const trunk = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+        trunk.setAttribute("x", tree.x - 3);
+        trunk.setAttribute("y", tree.y);
+        trunk.setAttribute("width", 6);
+        trunk.setAttribute("height", 15);
+        trunk.setAttribute("fill", "#8B4513");
+        terrainLayer.appendChild(trunk);
+        const canopy = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        canopy.setAttribute("cx", tree.x);
+        canopy.setAttribute("cy", tree.y);
+        canopy.setAttribute("r", tree.radius);
+        canopy.setAttribute("fill", "green");
+        terrainLayer.appendChild(canopy);
+        tree.el = { trunk: trunk, canopy: canopy };
+        terrains.push(tree);
+      }
+      // Bushes.
+      for (let i = 0; i < numBushes; i++){
+        let bush = { type: "bush", x: Math.random() * vw, y: Math.random() * vh, radius: 15 };
+        const bushEl = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        bushEl.setAttribute("cx", bush.x);
+        bushEl.setAttribute("cy", bush.y);
+        bushEl.setAttribute("r", bush.radius);
+        bushEl.setAttribute("fill", "#228B22");
+        terrainLayer.appendChild(bushEl);
+        bush.el = bushEl;
+        terrains.push(bush);
+      }
+    }
+    
+    /***** COLLISION DETECTION *****/
+    function checkBulletTerrainCollision(bullet) {
+      for (let i = 0; i < terrains.length; i++){
+        let t = terrains[i];
+        if (currentMission.mapType === "urban" && t.type === "building") {
+          if (
+            bullet.x >= t.x &&
+            bullet.x <= t.x + t.width &&
+            bullet.y >= t.y &&
+            bullet.y <= t.y + t.height
+          )
+            return true;
+        }
+        if (currentMission.mapType === "rural" && (t.type === "tree" || t.type === "bush")) {
+          let dx = bullet.x - t.x,
+              dy = bullet.y - t.y;
+          if (Math.hypot(dx, dy) < t.radius)
+            return true;
+        }
+      }
+      return false;
+    }
+    
+    function isTankColliding(x, y, radius = 20) {
+      for (let i = 0; i < terrains.length; i++){
+        let t = terrains[i];
+        if (currentMission.mapType === "urban" && t.type === "building") {
+          let rectCenterX = t.x + t.width / 2,
+              rectCenterY = t.y + t.height / 2;
+          let dx = Math.abs(x - rectCenterX),
+              dy = Math.abs(y - rectCenterY);
+          if (dx > t.width / 2 + radius || dy > t.height / 2 + radius)
+            continue;
+          if (dx <= t.width / 2 || dy <= t.height / 2)
+            return true;
+          let cornerDistanceSq = Math.pow(dx - t.width / 2, 2) + Math.pow(dy - t.height / 2, 2);
+          if (cornerDistanceSq <= radius * radius)
+            return true;
+        }
+        if (currentMission.mapType === "rural" && (t.type === "tree" || t.type === "bush")) {
+          let dx = x - t.x,
+              dy = y - t.y;
+          if (Math.hypot(dx, dy) < t.radius + radius)
+            return true;
+        }
+      }
+      return false;
+    }
+    
+    /***** PLAYER AND ENEMY CREATION *****/
+    function initPlayer() {
+      player = {
+        x: vw / 2,
+        y: vh / 2,
+        angle: 0,
+        health: 100,
+        ammoType: "normal",
+        weaponLevel: 1
+      };
+      while (playerGroup.firstChild) {
+        playerGroup.removeChild(playerGroup.firstChild);
+      }
+      let pBody = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      pBody.setAttribute("x", -20);
+      pBody.setAttribute("y", -10);
+      pBody.setAttribute("width", 40);
+      pBody.setAttribute("height", 20);
+      pBody.setAttribute("fill", "lime");
+      playerGroup.appendChild(pBody);
+      let pTurret = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      pTurret.setAttribute("cx", 0);
+      pTurret.setAttribute("cy", 0);
+      pTurret.setAttribute("r", 10);
+      pTurret.setAttribute("fill", "red");
+      playerGroup.appendChild(pTurret);
+      let pBarrel = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      pBarrel.setAttribute("x", 0);
+      pBarrel.setAttribute("y", -3);
+      pBarrel.setAttribute("width", 30);
+      pBarrel.setAttribute("height", 6);
+      pBarrel.setAttribute("fill", "yellow");
+      playerGroup.appendChild(pBarrel);
+      renderPlayer();
+    }
+    
+    function placePlayerSafely() {
+      let attempts = 0;
+      while (isTankColliding(player.x, player.y, 20) && attempts < 100) {
+        let safePoint = getRandomPoint();
+        if (!isTankColliding(safePoint.x, safePoint.y, 20)) {
+          player.x = safePoint.x;
+          player.y = safePoint.y;
+          break;
+        }
+        attempts++;
+      }
+      renderPlayer();
+    }
+    
+    function spawnEnemiesForMission(count) {
+      enemies = [];
+      for (let i = 0; i < count; i++) {
+        let edges = ["top", "bottom", "left", "right"];
+        let edge = edges[Math.floor(Math.random() * edges.length)];
+        let x, y;
+        if (edge === "top") {
+          x = Math.random() * vw;
+          y = 0;
+        } else if (edge === "bottom") {
+          x = Math.random() * vw;
+          y = vh;
+        } else if (edge === "left") {
+          x = 0;
+          y = Math.random() * vh;
+        } else {
+          x = vw;
+          y = Math.random() * vh;
+        }
+        let enemy = createEnemyTank(x, y);
+        enemies.push(enemy);
+      }
+    }
+    
+    function createEnemyTank(x, y) {
+      let enemy = {
+        x: x,
+        y: y,
+        angle: 0,
+        state: "patrol",
+        patrolTarget: getRandomPoint(),
+        cooldown: 0,
+        health: 3,
+        slowTimer: 0,
+        group: null
+      };
+      let group = document.createElementNS("http://www.w3.org/2000/svg", "g");
+      let body = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      body.setAttribute("x", -20);
+      body.setAttribute("y", -10);
+      body.setAttribute("width", 40);
+      body.setAttribute("height", 20);
+      body.setAttribute("fill", "blue");
+      group.appendChild(body);
+      let turret = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      turret.setAttribute("cx", 0);
+      turret.setAttribute("cy", 0);
+      turret.setAttribute("r", 10);
+      turret.setAttribute("fill", "white");
+      group.appendChild(turret);
+      let barrel = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      barrel.setAttribute("x", 0);
+      barrel.setAttribute("y", -3);
+      barrel.setAttribute("width", 30);
+      barrel.setAttribute("height", 6);
+      barrel.setAttribute("fill", "grey");
+      group.appendChild(barrel);
+      canvas.appendChild(group);
+      enemy.group = group;
+      return enemy;
+    }
+    
+    function getRandomPoint() {
+      return { x: Math.random() * vw, y: Math.random() * vh };
+    }
+    
+    /***** BULLET LOGIC *****/
+    function firePlayerBullet() {
+      const bulletSpeed = 15 + player.weaponLevel * 2;
+      let bullet = {
+        x: player.x + Math.cos(player.angle) * 30,
+        y: player.y + Math.sin(player.angle) * 30,
+        vx: Math.cos(player.angle) * bulletSpeed,
+        vy: Math.sin(player.angle) * bulletSpeed,
+        lifetime: 100,
+        type: player.ammoType,
+        damage: (player.ammoType === "heavy") ? 2 : 1
+      };
+      let bulletEl = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      bulletEl.setAttribute("cx", bullet.x);
+      bulletEl.setAttribute("cy", bullet.y);
+      bulletEl.setAttribute("r", 5);
+      bulletEl.setAttribute("fill", "white");
+      bullet.el = bulletEl;
+      canvas.appendChild(bulletEl);
+      playerBullets.push(bullet);
+    }
+    
+    function fireEnemyBullet(enemy) {
+      const bulletSpeed = 10;
+      let bullet = {
+        x: enemy.x + Math.cos(enemy.angle) * 30,
+        y: enemy.y + Math.sin(enemy.angle) * 30,
+        vx: Math.cos(enemy.angle) * bulletSpeed,
+        vy: Math.sin(enemy.angle) * bulletSpeed,
+        lifetime: 150,
+        damage: 10
+      };
+      let bulletEl = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      bulletEl.setAttribute("cx", bullet.x);
+      bulletEl.setAttribute("cy", bullet.y);
+      bulletEl.setAttribute("r", 5);
+      bulletEl.setAttribute("fill", "red");
+      bullet.el = bulletEl;
+      canvas.appendChild(bulletEl);
+      enemyBullets.push(bullet);
+    }
+    
+    /***** GAME OBJECT RESET *****/
+    function resetGameObjects() {
+      playerBullets = [];
+      enemyBullets = [];
+      enemies.forEach(enemy => {
+        if (enemy.group && enemy.group.parentNode) {
+          enemy.group.parentNode.removeChild(enemy.group);
+        }
+      });
+      enemies = [];
+      // Remove extra objective elements.
+      if (rescueTarget && rescueTarget.el && rescueTarget.el.parentNode) {
+        rescueTarget.el.parentNode.removeChild(rescueTarget.el);
+        rescueTarget = null;
+      }
+      if (targetBuilding && targetBuilding.el && targetBuilding.el.parentNode) {
+        targetBuilding.el.removeAttribute("stroke");
+        targetBuilding.el.removeAttribute("stroke-width");
+        targetBuilding = null;
+      }
+      initPlayer();
+    }
+    
+    /***** GAME LOOP *****/
+    function gameLoop() {
+      // Check for pause
+      if (isPaused) {
+        gameLoopId = requestAnimationFrame(gameLoop);
+        return;
+      }
+      let baseSpeed = 3;
+      terrains.forEach(t => {
+        if (currentMission.mapType === "urban" && t.type === "road") {
+          if (player.x >= t.x && player.x <= t.x + t.width &&
+              player.y >= t.y && player.y <= t.y + t.height) {
+            baseSpeed *= 1.2;
+          }
+        }
+      });
+      if (keys["ArrowUp"]) {
+        let newX = player.x + Math.cos(player.angle) * baseSpeed;
+        let newY = player.y + Math.sin(player.angle) * baseSpeed;
+        if (!isTankColliding(newX, newY, 20)) {
+          player.x = newX;
+          player.y = newY;
+        }
+      }
+      if (keys["ArrowDown"]) {
+        let newX = player.x - Math.cos(player.angle) * baseSpeed;
+        let newY = player.y - Math.sin(player.angle) * baseSpeed;
+        if (!isTankColliding(newX, newY, 20)) {
+          player.x = newX;
+          player.y = newY;
+        }
+      }
+      if (keys["ArrowLeft"]) { player.angle -= 0.05; }
+      if (keys["ArrowRight"]) { player.angle += 0.05; }
+      if (player.x < 0) player.x = vw;
+      if (player.x > vw) player.x = 0;
+      if (player.y < 0) player.y = vh;
+      if (player.y > vh) player.y = 0;
+      renderPlayer();
+      
+      // Check extra objective (rescue or destroy-target)
+      if (currentMission.extraObjective) {
+        if (currentMission.extraObjective.type === "rescue" && rescueTarget) {
+          // If player is within 30 pixels of rescue target, mark extra objective as complete.
+          if (Math.hypot(player.x - rescueTarget.x, player.y - rescueTarget.y) < 30) {
+            currentMission.extraObjective.completed = true;
+          }
+        }
+        if (currentMission.extraObjective.type === "destroy-target" && targetBuilding) {
+          // Check if the target building has been destroyed.
+          if (targetBuilding.health !== undefined && targetBuilding.health <= 0) {
+            currentMission.extraObjective.completed = true;
+          }
+        }
+      }
+      
+      // Update player bullets.
+      for (let i = playerBullets.length - 1; i >= 0; i--) {
+        let b = playerBullets[i];
+        b.x += b.vx;
+        b.y += b.vy;
+        b.lifetime--;
+        b.el.setAttribute("cx", b.x);
+        b.el.setAttribute("cy", b.y);
+        if (b.lifetime <= 0 || b.x < 0 || b.x > vw || b.y < 0 || b.y > vh || checkBulletTerrainCollision(b)) {
+          canvas.removeChild(b.el);
+          playerBullets.splice(i, 1);
+          continue;
+        }
+        for (let j = enemies.length - 1; j >= 0; j--) {
+          let enemy = enemies[j];
+          if (Math.hypot(b.x - enemy.x, b.y - enemy.y) < 20) {
+            canvas.removeChild(b.el);
+            playerBullets.splice(i, 1);
+            enemy.health -= b.damage;
+            if (b.type === "slow") enemy.slowTimer = 120;
+            // If enemy tank is destroyed.
+            if (enemy.health <= 0) {
+              canvas.removeChild(enemy.group);
+              enemies.splice(j, 1);
+              enemyKillCount++;
+              if (difficulty === "medium" && enemyKillCount % 10 === 0) {
+                playerLives++;
+              }
+              if (enemyKillCount >= currentMission.enemyCount) {
+                // Also require extra objective (if any) to be complete:
+                if (!currentMission.extraObjective || currentMission.extraObjective.completed) {
+                  missionComplete();
+                }
+              }
+            }
+            break;
+          }
+        }
+      }
+      
+      // Update enemy bullets.
+      for (let i = enemyBullets.length - 1; i >= 0; i--) {
+        let b = enemyBullets[i];
+        b.x += b.vx;
+        b.y += b.vy;
+        b.lifetime--;
+        b.el.setAttribute("cx", b.x);
+        b.el.setAttribute("cy", b.y);
+        if (b.lifetime <= 0 || b.x < 0 || b.x > vw || b.y < 0 || b.y > vh || checkBulletTerrainCollision(b)) {
+          canvas.removeChild(b.el);
+          enemyBullets.splice(i, 1);
+          continue;
+        }
+        if (Math.hypot(b.x - player.x, b.y - player.y) < 20) {
+          if (difficulty !== "easy") {
+            playerLives--;
+            if (playerLives <= 0) {
+              gameOver = true;
+            }
+          }
+          canvas.removeChild(b.el);
+          enemyBullets.splice(i, 1);
+        }
+      }
+      
+      // Update enemies.
+      enemies.forEach(enemy => {
+        let speedMultiplier = 1;
+        if (enemy.slowTimer > 0) {
+          speedMultiplier = 0.5;
+          enemy.slowTimer--;
+        }
+        if (enemy.state === "patrol") {
+          let dx = enemy.patrolTarget.x - enemy.x;
+          let dy = enemy.patrolTarget.y - enemy.y;
+          let dist = Math.hypot(dx, dy);
+          if (dist < 10) {
+            enemy.patrolTarget = getRandomPoint();
+          } else {
+            enemy.angle = Math.atan2(dy, dx);
+            let newX = enemy.x + Math.cos(enemy.angle) * 1 * speedMultiplier;
+            let newY = enemy.y + Math.sin(enemy.angle) * 1 * speedMultiplier;
+            if (!isTankColliding(newX, newY, 20)) {
+              enemy.x = newX;
+              enemy.y = newY;
+            } else {
+              enemy.patrolTarget = getRandomPoint();
+            }
+          }
+          if (enemySeesPlayer(enemy)) {
+            enemy.state = "pursue";
+          }
+        } else if (enemy.state === "pursue") {
+          let dx = player.x - enemy.x;
+          let dy = player.y - enemy.y;
+          enemy.angle = Math.atan2(dy, dx);
+          let newX = enemy.x + Math.cos(enemy.angle) * 1.5 * speedMultiplier;
+          let newY = enemy.y + Math.sin(enemy.angle) * 1.5 * speedMultiplier;
+          if (!isTankColliding(newX, newY, 20)) {
+            enemy.x = newX;
+            enemy.y = newY;
+          } else {
+            enemy.state = "patrol";
+            enemy.patrolTarget = getRandomPoint();
+          }
+          enemy.cooldown--;
+          if (enemy.cooldown <= 0 && enemySeesPlayer(enemy)) {
+            fireEnemyBullet(enemy);
+            enemy.cooldown = 180;
+          }
+          if (!enemySeesPlayer(enemy)) {
+            enemy.state = "patrol";
+            enemy.patrolTarget = getRandomPoint();
+          }
+        }
+        enemy.group.setAttribute("transform", `translate(${enemy.x}, ${enemy.y}) rotate(${enemy.angle * 180 / Math.PI})`);
+      });
+      
+      updateHUDDisplay();
+      
+      if (gameOver) {
+        endGame();
+      } else {
+        gameLoopId = requestAnimationFrame(gameLoop);
+      }
+    }
+    
+    function enemySeesPlayer(enemy) {
+      let dx = player.x - enemy.x,
+          dy = player.y - enemy.y;
+      let dist = Math.hypot(dx, dy);
+      if (dist > 300) return false;
+      let angleToPlayer = Math.atan2(dy, dx);
+      let diff = Math.abs(angleToPlayer - enemy.angle);
+      if (diff > Math.PI) diff = 2 * Math.PI - diff;
+      return diff <= Math.PI / 2;
+    }
+    
+    function updateHUDDisplay() {
+      while (hudGroup.firstChild) {
+        hudGroup.removeChild(hudGroup.firstChild);
+      }
+      let livesText = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      livesText.setAttribute("x", 20);
+      livesText.setAttribute("y", 100);
+      livesText.style.fontSize = "16px";
+      livesText.textContent = (difficulty === "easy") ? "Lives: ∞" : "Lives: " + playerLives;
+      hudGroup.appendChild(livesText);
+      
+      let killsText = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      killsText.setAttribute("x", 20);
+      killsText.setAttribute("y", 130);
+      killsText.style.fontSize = "16px";
+      killsText.textContent = "Kills: " + enemyKillCount + " / " + currentMission.enemyCount;
+      hudGroup.appendChild(killsText);
+      
+      // Extra Objective HUD (if applicable)
+      if (currentMission.extraObjective) {
+        let extraText = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        extraText.setAttribute("x", 20);
+        extraText.setAttribute("y", 160);
+        extraText.style.fontSize = "16px";
+        if (currentMission.extraObjective.type === "rescue") {
+          extraText.textContent = "Rescue target: " + (currentMission.extraObjective.completed ? "Complete" : "Incomplete");
+        } else if (currentMission.extraObjective.type === "destroy-target") {
+          extraText.textContent = "Target building: " + (currentMission.extraObjective.completed ? "Destroyed" : "Intact");
+        }
+        hudGroup.appendChild(extraText);
+      }
+    }
+    
+    function endGame() {
+      cancelAnimationFrame(gameLoopId);
+      document.getElementById("gameOverText").textContent = "You have been defeated after eliminating " + enemyKillCount + " enemy tanks.";
+      showScreen("gameOverScreen");
+    }
+    
+    /***** INPUT HANDLING *****/
+    let keys = {};
+    document.addEventListener("keydown", e => {
+      if (e.key.toLowerCase() === "p") {
+        togglePause();
+      } else {
+        keys[e.key] = true;
+        if (e.code === "Space") {
+          firePlayerBullet();
+        }
+      }
+    });
+    document.addEventListener("keyup", e => {
+      keys[e.key] = false;
+    });
+    
+    /***** PAUSE FUNCTIONALITY *****/
+    function togglePause() {
+      isPaused = !isPaused;
+      document.getElementById("pauseBtn").textContent = isPaused ? "Resume" : "Pause";
+      if (!isPaused) {
+        gameLoop();
+      }
+    }
+    
+    /***** INITIALIZATION *****/
+    function initGame() {
+      vw = window.innerWidth;
+      vh = window.innerHeight;
+      canvas.setAttribute("viewBox", `0 0 ${vw} ${vh}`);
+      initPlayer();
+    }
+    initGame();
+    
+    /***** WINDOW RESIZE *****/
+    window.addEventListener("resize", () => {
+      vw = window.innerWidth;
+      vh = window.innerHeight;
+      canvas.setAttribute("viewBox", `0 0 ${vw} ${vh}`);
+    });
+    
+    /***** UPDATED PLAYER SAFE PLACEMENT *****/
+    function placePlayerSafely() {
+      let attempts = 0;
+      while (isTankColliding(player.x, player.y, 20) && attempts < 100) {
+        let safePoint = getRandomPoint();
+        if (!isTankColliding(safePoint.x, safePoint.y, 20)) {
+          player.x = safePoint.x;
+          player.y = safePoint.y;
+          break;
+        }
+        attempts++;
+      }
+      renderPlayer();
+    }
+  </script>
+</body>
+</html>
